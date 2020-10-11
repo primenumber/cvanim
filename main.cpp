@@ -1,3 +1,5 @@
+#include <array>
+#include <chrono>
 #include <iostream>
 #include <limits>
 #include <sstream>
@@ -18,20 +20,35 @@ class Point3 {
   }
 };
 
+using idx_t = uint32_t;
+
 class Triangle {
  public:
-  Point3 points[3];
-  Triangle(const Point3 p0, const Point3 p1, const Point3 p2)
-    : points{p0, p1, p2} {};
+  idx_t indices[3];
+  Triangle(const idx_t i0, const idx_t i1, const idx_t i2)
+    : indices{i0, i1, i2} {};
 };
 
 class Polygon {
  public:
+  std::vector<float> v[4];
   std::vector<Triangle> triangles;
-  explicit Polygon(const std::vector<Triangle> &triangles)
-    : triangles(triangles) {}
-  explicit Polygon(std::vector<Triangle> &&triangles)
-    : triangles(std::move(triangles)) {}
+  Polygon() = default;
+  Polygon(const Polygon&) = default;
+  Polygon(Polygon&&) = default;
+  Polygon(
+      const std::vector<float>& vx,
+      const std::vector<float>& vy,
+      const std::vector<float>& vz,
+      const std::vector<float>& vw,
+      const std::vector<Triangle>& triangles)
+    : v({vx, vy, vz, vw}), triangles(triangles) {}
+  size_t num_vertices() const { return std::size(v[0]); }
+  size_t num_triangles() const { return std::size(triangles); }
+  //explicit Polygon(const std::vector<Triangle> &triangles)
+  //  : triangles(triangles) {}
+  //explicit Polygon(std::vector<Triangle> &&triangles)
+  //  : triangles(std::move(triangles)) {}
 };
 
 class Mat4 {
@@ -61,26 +78,34 @@ class Mat4 {
   }
 };
 
-Point3 operator*(const Mat4 &mat, const Point3 &p) {
-  Point3 res;
-  for (size_t i = 0; i < 4; ++i) {
-    for (size_t j = 0; j < 4; ++j) {
-      res.v[i] += mat.v[i][j] * p.v[j];
-    }
-  }
-  return res;
-}
-
-Triangle operator*(const Mat4 &mat, const Triangle &t) {
-  return Triangle(mat * t.points[0], mat * t.points[1], mat * t.points[2]);
-}
+//Point3 operator*(const Mat4 &mat, const Point3 &p) {
+//  Point3 res;
+//  for (size_t i = 0; i < 4; ++i) {
+//    for (size_t j = 0; j < 4; ++j) {
+//      res.v[i] += mat.v[i][j] * p.v[j];
+//    }
+//  }
+//  return res;
+//}
+//
+//Triangle operator*(const Mat4 &mat, const Triangle &t) {
+//  return Triangle(mat * t.points[0], mat * t.points[1], mat * t.points[2]);
+//}
 
 Polygon operator*(const Mat4 &mat, const Polygon &poly) {
-  std::vector<Triangle> res;
-  for (const auto &tri : poly.triangles) {
-    res.push_back(mat * tri);
+  size_t n = poly.num_vertices();
+  std::vector<float> res[4] = {};
+  for (size_t i = 0; i < 4; ++i) {
+    res[i].resize(n, 0.f);
   }
-  return Polygon(std::move(res));
+  for (size_t i = 0; i < n; ++i) {
+    for (size_t j = 0; j < 4; ++j) {
+      for (size_t k = 0; k < 4; ++k) {
+        res[j][i] += mat.v[j][k] * poly.v[k][i];
+      }
+    }
+  }
+  return Polygon(res[0], res[1], res[2], res[3], poly.triangles);
 }
 
 Mat4 operator*(const Mat4 &lhs, const Mat4 &rhs) {
@@ -146,54 +171,56 @@ Mat4 perspective() {
   return res;
 }
 
-Point3 perspective(const Mat4 &mat, const Point3 &p) {
-  Point3 res3 = mat * p;
-  return Point3(res3.v[0] / res3.v[3], res3.v[1] / res3.v[3], res3.v[2] / res3.v[3]);
-}
-
-Triangle perspective(const Mat4 &mat, const Triangle &tri) {
-  return Triangle(
-      perspective(mat, tri.points[0]),
-      perspective(mat, tri.points[1]),
-      perspective(mat, tri.points[2])
-  );
-}
+//Point3 perspective(const Mat4 &mat, const Point3 &p) {
+//  Point3 res3 = mat * p;
+//  return Point3(res3.v[0] / res3.v[3], res3.v[1] / res3.v[3], res3.v[2] / res3.v[3]);
+//}
+//
+//Triangle perspective(const Mat4 &mat, const Triangle &tri) {
+//  return Triangle(
+//      perspective(mat, tri.points[0]),
+//      perspective(mat, tri.points[1]),
+//      perspective(mat, tri.points[2])
+//  );
+//}
 
 Polygon perspective(const Mat4 &mat, const Polygon &poly) {
-  std::vector<Triangle> res;
-  for (const auto &tri : poly.triangles) {
-    res.push_back(perspective(mat, tri));
+  auto persed = mat * poly;
+  size_t n = poly.num_vertices();
+  for (size_t i = 0; i < n; ++i) {
+    for (size_t j = 0; j < 3; ++j) {
+      persed.v[j][i] /= persed.v[3][i];
+    }
   }
-  return Polygon(std::move(res));
+  return persed;
 }
 
-Polygon make_cube() {
-  Point3 a0(0.0f, 0.0f, 0.0f);
-  Point3 a1[3] = {
-    Point3(0.0f, 0.0f, 1.0f), 
-    Point3(0.0f, 1.0f, 0.0f), 
-    Point3(1.0f, 0.0f, 0.0f)
-  };
-  Point3 a2[3] = {
-    Point3(1.0f, 0.0f, 1.0f), 
-    Point3(0.0f, 1.0f, 1.0f), 
-    Point3(1.0f, 1.0f, 0.0f)
-  };
-  Point3 a3(1.0f, 1.0f, 1.0f);
-  std::vector<Triangle> tri;
-  for (size_t i = 0; i < 3; ++i) {
-    tri.emplace_back(a0, a1[i], a1[(i+1)%3]);
-    tri.emplace_back(a1[i], a1[(i+1)%3], a2[(i+1)%3]);
-    tri.emplace_back(a1[i], a2[i], a2[(i+1)%3]);
-    tri.emplace_back(a2[i], a2[(i+1)%3], a3);
-  }
-  return Polygon(tri);
-}
+//Polygon make_cube() {
+//  Point3 a0(0.0f, 0.0f, 0.0f);
+//  Point3 a1[3] = {
+//    Point3(0.0f, 0.0f, 1.0f), 
+//    Point3(0.0f, 1.0f, 0.0f), 
+//    Point3(1.0f, 0.0f, 0.0f)
+//  };
+//  Point3 a2[3] = {
+//    Point3(1.0f, 0.0f, 1.0f), 
+//    Point3(0.0f, 1.0f, 1.0f), 
+//    Point3(1.0f, 1.0f, 0.0f)
+//  };
+//  Point3 a3(1.0f, 1.0f, 1.0f);
+//  std::vector<Triangle> tri;
+//  for (size_t i = 0; i < 3; ++i) {
+//    tri.emplace_back(a0, a1[i], a1[(i+1)%3]);
+//    tri.emplace_back(a1[i], a1[(i+1)%3], a2[(i+1)%3]);
+//    tri.emplace_back(a1[i], a2[i], a2[(i+1)%3]);
+//    tri.emplace_back(a2[i], a2[(i+1)%3], a3);
+//  }
+//  return Polygon(tri);
+//}
 
 Polygon poly_from_obj_file(const std::string &filename) {
   std::ifstream ifs(filename);
-  std::vector<Point3> vp;
-  std::vector<Triangle> tris;
+  Polygon poly;
   std::string line;
   while (std::getline(ifs, line)) {
     std::stringstream ss;
@@ -203,15 +230,18 @@ Polygon poly_from_obj_file(const std::string &filename) {
     if (type == "v") {
       float x, y, z;
       ss >> x >> y >> z;
-      vp.emplace_back(x, y, z);
+      poly.v[0].push_back(x);
+      poly.v[1].push_back(y);
+      poly.v[2].push_back(z);
+      poly.v[3].push_back(1.f);
     } else if (type == "f") {
       int p1, p2, p3;
       ss >> p1 >> p2 >> p3;
       --p1; --p2; --p3;
-      tris.emplace_back(vp[p1], vp[p2], vp[p3]);
+      poly.triangles.emplace_back(p1, p2, p3);
     }
   }
-  return Polygon(std::move(tris));
+  return poly;
 }
 
 class Line {
@@ -221,7 +251,7 @@ class Line {
     : p{p1, p2} {}
 };
 
-std::tuple<bool, Point3> crossY(const Line l, const float y) {
+std::tuple<bool, Point3> crossY(const Line& l, const float y) {
   float x1 = l.p[0].v[0];
   float x2 = l.p[1].v[0];
   float y1 = l.p[0].v[1];
@@ -237,36 +267,41 @@ std::tuple<bool, Point3> crossY(const Line l, const float y) {
 
 void rasterise(std::vector<int32_t> &tri_index_line, std::vector<float> &depth,
     const size_t width,
-    const float y, const float aspect, const Triangle &tri,
+    const float y, const float aspect,
+    const std::array<Point3, 3> &tri,
     const size_t index) {
   std::tuple<bool, Point3> crs[3];
   for (size_t i = 0; i < 3; ++i) {
-    Point3 p1 = tri.points[i];
-    Point3 p2 = tri.points[(i+1)%3];
+    Point3 p1 = tri[i];
+    const auto nx = i < 2 ? i+1 : 0;
+    Point3 p2 = tri[nx];
     Line l(p1, p2);
     crs[i] = crossY(l, y);
   }
-  float beta = aspect * width / 2;
+  float beta = aspect * width / 2.0f;
   for (size_t i = 0; i < 3; ++i) {
     auto [valid1, crs1] = crs[i];
-    auto [valid2, crs2] = crs[(i+1)%3];
+    const auto nx = i < 2 ? i+1 : 0;
+    auto [valid2, crs2] = crs[nx];
     if (!valid1 || !valid2) continue;
-    float x1 = crs1.v[0];
-    float x2 = crs2.v[0];
+    float x1 = beta * crs1.v[0];
+    float x2 = beta * crs2.v[0];
     // z' = 1 + 1/z -> z = 1 / (z' - 1)
-    float z1 = 1.0f / (crs1.v[2] - 1.0f);
-    float z2 = 1.0f / (crs2.v[2] - 1.0f);
+    float z1 = beta / (crs1.v[2] - 1.0f);
     if (z1 <= 0) continue;
+    float z2 = beta / (crs2.v[2] - 1.0f);
     if (z2 <= 0) continue;
     if (x1 > x2) {
       std::swap(x1, x2);
       std::swap(z1, z2);
     }
-    int begin = std::max(0.0f, ceilf(beta * (x1 + 1.0)));
-    int end = std::min(width-1.0f, floorf(beta * (x2 + 1.0)));
+    int begin = std::max(0.0f, ceilf(x1 + beta));
+    int end = std::min(width-1.0f, floorf(x2 + beta));
+    auto coeff = (z2 - z1) / (x2 - x1);
+    auto bias = z1 - coeff * (beta + x1);
     for (int j = begin; j <= end; ++j) {
-      float x = (j / beta - 1.0);
-      float z = z1 + (z2 - z1) / (x2 - x1) * (x - x1);
+      float x = static_cast<float>(j);
+      float z = coeff * x + bias;
       if (z < depth[j]) {
         depth[j] = z;
         tri_index_line[j] = index;
@@ -278,8 +313,15 @@ void rasterise(std::vector<int32_t> &tri_index_line, std::vector<float> &depth,
 void rasterise(std::vector<int32_t> &tri_index_line, std::vector<float> &depth,
     const size_t width,
     const float y, const float aspect, const Polygon &poly) {
-  for (size_t i = 0; i < poly.triangles.size(); ++i) {
-    rasterise(tri_index_line, depth, width, y, aspect, poly.triangles[i], i);
+  for (size_t i = 0; i < poly.num_triangles(); ++i) {
+    std::array<Point3, 3> tri;
+    for (size_t j = 0; j < 3; ++j) {
+      auto idx = poly.triangles[i].indices[j];
+      for (size_t k = 0; k < 3; ++k) {
+        tri[j].v[k] = poly.v[k][idx];
+      }
+    }
+    rasterise(tri_index_line, depth, width, y, aspect, tri, i);
   }
 }
 
@@ -291,8 +333,8 @@ void rasterise(Buf<int32_t> &tri_index, const size_t width, const size_t height,
 #pragma omp parallel for
   for (size_t i = 0; i < height; ++i) {
     std::vector<float> depth(width, std::numeric_limits<float>::infinity());
-    rasterise(tri_index[i], depth, width, 1.0 - 2 * i / (float)height,
-        height / (float)width, poly);
+    rasterise(tri_index[i], depth, width, 1.0f - static_cast<float>(2 * i) / static_cast<float>(height),
+        static_cast<float>(height) / static_cast<float>(width), poly);
   }
 }
 
@@ -306,9 +348,9 @@ Point3 cross(const Line &lhs, const Line &rhs) {
   return Point3(y1*z2 - y2*z1, z1*x2 - z2*x1, x1*y2 - x2*y1);
 }
 
-Point3 normal_vector(const Triangle &tri) {
-  return cross(Line(tri.points[1], tri.points[0]),
-      Line(tri.points[2], tri.points[0]));
+Point3 normal_vector(const std::array<Point3, 3> &tri) {
+  return cross(Line(tri[1], tri[0]),
+      Line(tri[2], tri[0]));
 }
 
 float dot(Point3 lhs, Point3 rhs) {
@@ -323,11 +365,17 @@ void draw(cv::Mat &baseimage, const Buf<int32_t> &tri_index,
     for (size_t j = 0; j < width; ++j) {
       int32_t index = tri_index[i][j];
       if (index < 0) continue;
-      auto &tri = poly.triangles[index];
+      std::array<Point3, 3> tri;
+      for (size_t k = 0; k < 3; ++k) {
+        auto point_index = poly.triangles[index].indices[k];
+        for (size_t l = 0; l < 3; ++l) {
+          tri[k].v[l] = poly.v[l][point_index];
+        }
+      }
       Point3 normal = normal_vector(tri);
       float cos = dot(normal, light_dir)
         / sqrtf(dot(normal, normal) * dot(light_dir, light_dir));
-      line[j][1] = 200 * std::max(0.0f, -cos) + 50;
+      line[j][1] = 200.0f * std::max(0.0f, -cos) + 50.0f;
     }
   }
 }
@@ -336,11 +384,12 @@ int main() {
   constexpr size_t width = 640;
   constexpr size_t height = 480;
   int cnt = 0;
-  Polygon cube = make_cube();
+  //Polygon cube = make_cube();
   Polygon teapot = poly_from_obj_file("teapot.obj");
   float rad = 0.0;
   cv::Mat baseimage(cv::Size(width, height), CV_8UC3);
   while (true) {
+    const auto start = std::chrono::system_clock::now();
     std::cerr << cnt << std::endl;
     Mat4 mat_scale = scale(30.0f, 30.0f, 30.0f);
     Mat4 mat_rot = rotateY(rad);
@@ -362,10 +411,14 @@ int main() {
     cv::imshow("Image", baseimage);
     ++cnt;
     if (cnt >= 256) {
+      break;
       cnt = 0;
     }
     rad += 0.01;
-    cv::waitKey(16);
+    const auto end = std::chrono::system_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+    int rem = 16 - duration.count();
+    cv::waitKey(std::max(1, rem));
   }
 	return 0;
 }
