@@ -1,3 +1,4 @@
+#include <cmath>
 #include <array>
 #include <chrono>
 #include <iostream>
@@ -5,6 +6,7 @@
 #include <sstream>
 #include <vector>
 #include <opencv2/opencv.hpp>
+#include <omp.h>
 
 class Point3 {
  public:
@@ -19,6 +21,10 @@ class Point3 {
     return Point3(x, y, z, 0);
   }
 };
+
+Point3 operator*(const float lhs, const Point3& rhs) {
+  return Point3(lhs * rhs.v[0], lhs * rhs.v[1], lhs * rhs.v[2]);
+}
 
 using idx_t = uint32_t;
 
@@ -94,18 +100,18 @@ class Mat4 {
 
 Polygon operator*(const Mat4 &mat, const Polygon &poly) {
   size_t n = poly.num_vertices();
-  std::vector<float> res[4] = {};
+  Polygon res = poly;
   for (size_t i = 0; i < 4; ++i) {
-    res[i].resize(n, 0.f);
+    res.v[i].assign(n, 0.f);
   }
-  for (size_t i = 0; i < n; ++i) {
-    for (size_t j = 0; j < 4; ++j) {
+  for (size_t j = 0; j < 4; ++j) {
+    for (size_t i = 0; i < n; ++i) {
       for (size_t k = 0; k < 4; ++k) {
-        res[j][i] += mat.v[j][k] * poly.v[k][i];
+        res.v[j][i] += mat.v[j][k] * poly.v[k][i];
       }
     }
   }
-  return Polygon(res[0], res[1], res[2], res[3], poly.triangles);
+  return res;
 }
 
 Mat4 operator*(const Mat4 &lhs, const Mat4 &rhs) {
@@ -310,31 +316,46 @@ void rasterise(std::vector<int32_t> &tri_index_line, std::vector<float> &depth,
   }
 }
 
-void rasterise(std::vector<int32_t> &tri_index_line, std::vector<float> &depth,
-    const size_t width,
-    const float y, const float aspect, const Polygon &poly) {
-  for (size_t i = 0; i < poly.num_triangles(); ++i) {
-    std::array<Point3, 3> tri;
-    for (size_t j = 0; j < 3; ++j) {
-      auto idx = poly.triangles[i].indices[j];
-      for (size_t k = 0; k < 3; ++k) {
-        tri[j].v[k] = poly.v[k][idx];
-      }
-    }
-    rasterise(tri_index_line, depth, width, y, aspect, tri, i);
-  }
-}
-
 template <typename T>
 using Buf = std::vector<std::vector<T>>;
 
+void calc_ranges(std::vector<std::tuple<float, float, size_t>> &ranges, const Polygon &poly) {
+#pragma omp parallel for
+  for (size_t i = 0; i < poly.num_triangles(); ++i) {
+    float min_y = std::numeric_limits<float>::infinity();
+    float max_y = -std::numeric_limits<float>::infinity();
+    for (size_t j = 0; j < 3; ++j) {
+      auto idx = poly.triangles[i].indices[j];
+      min_y = std::min(min_y, poly.v[1][idx]);
+      max_y = std::max(max_y, poly.v[1][idx]);
+    }
+    ranges[i] = std::make_tuple(min_y, max_y, i);
+  }
+  std::sort(std::begin(ranges), std::end(ranges));
+}
+
 void rasterise(Buf<int32_t> &tri_index, const size_t width, const size_t height,
     const Polygon &poly) {
-#pragma omp parallel for
+  std::vector<std::tuple<float, float, size_t>> ranges(poly.num_triangles());
+  calc_ranges(ranges, poly);
+
+#pragma omp parallel for schedule(dynamic)
   for (size_t i = 0; i < height; ++i) {
-    std::vector<float> depth(width, std::numeric_limits<float>::infinity());
-    rasterise(tri_index[i], depth, width, 1.0f - static_cast<float>(2 * i) / static_cast<float>(height),
-        static_cast<float>(height) / static_cast<float>(width), poly);
+    std::vector depth(width, std::numeric_limits<float>::infinity());
+    const float y = 1.0f - static_cast<float>(2 * i) / static_cast<float>(height);
+    const float aspect = static_cast<float>(height) / static_cast<float>(width);
+    for (auto&& [y_start, y_end, j] : ranges) {
+      if (y_start > y) break;
+      if (y_end < y) continue;
+      std::array<Point3, 3> tri;
+      for (size_t k = 0; k < 3; ++k) {
+        auto idx = poly.triangles[j].indices[k];
+        for (size_t l = 0; l < 3; ++l) {
+          tri[k].v[l] = poly.v[l][idx];
+        }
+      }
+      rasterise(tri_index[i], depth, width, y, aspect, tri, j);
+    }
   }
 }
 
@@ -353,13 +374,14 @@ Point3 normal_vector(const std::array<Point3, 3> &tri) {
       Line(tri[2], tri[0]));
 }
 
-float dot(Point3 lhs, Point3 rhs) {
+float dot(const Point3& lhs, const Point3& rhs) {
   return lhs.v[0] * rhs.v[0] + lhs.v[1] * rhs.v[1] + lhs.v[2] * rhs.v[2];
 }
 
 void draw(cv::Mat &baseimage, const Buf<int32_t> &tri_index,
     const size_t width, const size_t height, const Polygon &poly) {
-  const Point3 light_dir = Point3::direction(1, 1, 1);
+  const Point3 light_dir = (1.f / std::sqrt(3.f)) * Point3::direction(1, 1, 1);
+#pragma omp parallel for schedule(dynamic)
   for (size_t i = 0; i < height; ++i) {
     cv::Vec3b *line = baseimage.ptr<cv::Vec3b>(i);
     for (size_t j = 0; j < width; ++j) {
@@ -374,22 +396,23 @@ void draw(cv::Mat &baseimage, const Buf<int32_t> &tri_index,
       }
       Point3 normal = normal_vector(tri);
       float cos = dot(normal, light_dir)
-        / sqrtf(dot(normal, normal) * dot(light_dir, light_dir));
+        / sqrtf(dot(normal, normal));
       line[j][1] = 200.0f * std::max(0.0f, -cos) + 50.0f;
     }
   }
 }
 
 int main() {
-  constexpr size_t width = 640;
-  constexpr size_t height = 480;
+  constexpr size_t width = 1920;
+  constexpr size_t height = 1080;
+  const size_t fps = 144;
   int cnt = 0;
   //Polygon cube = make_cube();
   Polygon teapot = poly_from_obj_file("teapot.obj");
   float rad = 0.0;
   cv::Mat baseimage(cv::Size(width, height), CV_8UC3);
+  const auto start = std::chrono::system_clock::now();
   while (true) {
-    const auto start = std::chrono::system_clock::now();
     std::cerr << cnt << std::endl;
     Mat4 mat_scale = scale(30.0f, 30.0f, 30.0f);
     Mat4 mat_rot = rotateY(rad);
@@ -417,7 +440,7 @@ int main() {
     rad += 0.01;
     const auto end = std::chrono::system_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-    int rem = 16 - duration.count();
+    int rem = cnt * 1000 / fps - duration.count();
     cv::waitKey(std::max(1, rem));
   }
 	return 0;
