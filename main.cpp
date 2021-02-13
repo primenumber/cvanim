@@ -51,10 +51,6 @@ class Polygon {
     : v({vx, vy, vz, vw}), triangles(triangles) {}
   size_t num_vertices() const { return std::size(v[0]); }
   size_t num_triangles() const { return std::size(triangles); }
-  //explicit Polygon(const std::vector<Triangle> &triangles)
-  //  : triangles(triangles) {}
-  //explicit Polygon(std::vector<Triangle> &&triangles)
-  //  : triangles(std::move(triangles)) {}
 };
 
 class Mat4 {
@@ -83,20 +79,6 @@ class Mat4 {
     return res;
   }
 };
-
-//Point3 operator*(const Mat4 &mat, const Point3 &p) {
-//  Point3 res;
-//  for (size_t i = 0; i < 4; ++i) {
-//    for (size_t j = 0; j < 4; ++j) {
-//      res.v[i] += mat.v[i][j] * p.v[j];
-//    }
-//  }
-//  return res;
-//}
-//
-//Triangle operator*(const Mat4 &mat, const Triangle &t) {
-//  return Triangle(mat * t.points[0], mat * t.points[1], mat * t.points[2]);
-//}
 
 Polygon operator*(const Mat4 &mat, const Polygon &poly) {
   size_t n = poly.num_vertices();
@@ -176,19 +158,6 @@ Mat4 perspective() {
   res.v[3][3] = 0.0f;
   return res;
 }
-
-//Point3 perspective(const Mat4 &mat, const Point3 &p) {
-//  Point3 res3 = mat * p;
-//  return Point3(res3.v[0] / res3.v[3], res3.v[1] / res3.v[3], res3.v[2] / res3.v[3]);
-//}
-//
-//Triangle perspective(const Mat4 &mat, const Triangle &tri) {
-//  return Triangle(
-//      perspective(mat, tri.points[0]),
-//      perspective(mat, tri.points[1]),
-//      perspective(mat, tri.points[2])
-//  );
-//}
 
 Polygon perspective(const Mat4 &mat, const Polygon &poly) {
   auto persed = mat * poly;
